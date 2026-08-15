@@ -99,7 +99,17 @@ class InputEvent:
         x = _integer(data.get("x"), "Mouse x coordinate")
         y = _integer(data.get("y"), "Mouse y coordinate")
         if event_type == "mouse_move":
-            return {"x": x, "y": y}
+            result = {"x": x, "y": y}
+            has_dx = "dx" in data
+            has_dy = "dy" in data
+            if has_dx != has_dy:
+                raise RecordingFormatError(
+                    "A relative mouse event must contain both dx and dy."
+                )
+            if has_dx:
+                result["dx"] = _integer(data.get("dx"), "Relative mouse x movement")
+                result["dy"] = _integer(data.get("dy"), "Relative mouse y movement")
+            return result
         if event_type == "mouse_button":
             button = data.get("button")
             pressed = data.get("pressed")

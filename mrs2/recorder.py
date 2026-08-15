@@ -1,4 +1,4 @@
-"""Global input capture and playback using pynput."""
+"""Global input capture and playback using pynput and Windows Raw Input."""
 
 from __future__ import annotations
 
@@ -10,6 +10,11 @@ from typing import Any, Callable
 from pynput import keyboard, mouse
 
 from .model import InputEvent, Recording, RecordingFormatError
+from .windows_input import (
+    WINDOWS_RAW_INPUT_AVAILABLE,
+    RawMouseListener,
+    send_relative_mouse,
+)
 
 
 StateCallback = Callable[[str, object | None], None]
@@ -74,6 +79,7 @@ class InputEngine:
         self._cancel_playback = threading.Event()
         self._keyboard_listener: keyboard.Listener | None = None
         self._mouse_listener: mouse.Listener | None = None
+        self._raw_mouse_listener: RawMouseListener | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -85,21 +91,41 @@ class InputEngine:
         with self._lock:
             return self._playing
 
+    @property
+    def uses_raw_mouse(self) -> bool:
+        return self._raw_mouse_listener is not None
+
     def start_listeners(self) -> None:
-        """Start the global keyboard and mouse listeners."""
+        """Start global keyboard, mouse-button, and mouse-motion listeners."""
         if self._keyboard_listener is not None:
             return
+
+        move_callback = self._on_mouse_move
+        if WINDOWS_RAW_INPUT_AVAILABLE:
+            raw_listener = RawMouseListener(self._on_raw_mouse_move)
+            try:
+                raw_listener.start()
+            except Exception as exc:
+                self._notify("raw_mouse_unavailable", exc)
+            else:
+                self._raw_mouse_listener = raw_listener
+                move_callback = None  # type: ignore[assignment]
+
         self._keyboard_listener = keyboard.Listener(
             on_press=self._on_key_press,
             on_release=self._on_key_release,
         )
         self._mouse_listener = mouse.Listener(
-            on_move=self._on_mouse_move,
+            on_move=move_callback,
             on_click=self._on_mouse_click,
             on_scroll=self._on_mouse_scroll,
         )
-        self._keyboard_listener.start()
-        self._mouse_listener.start()
+        try:
+            self._keyboard_listener.start()
+            self._mouse_listener.start()
+        except Exception:
+            self.shutdown()
+            raise
 
     def shutdown(self) -> None:
         self._cancel_playback.set()
@@ -107,6 +133,9 @@ class InputEngine:
             self._keyboard_listener.stop()
         if self._mouse_listener is not None:
             self._mouse_listener.stop()
+        if self._raw_mouse_listener is not None:
+            self._raw_mouse_listener.stop()
+            self._raw_mouse_listener = None
 
     def start_recording(self) -> bool:
         with self._lock:
@@ -255,14 +284,16 @@ class InputEngine:
                     self._latched_hotkeys.discard("record")
                     self._hotkey_candidate_events = []
                     if self._suppress_activation_chord:
-                        # Begin the event timeline after the activation chord
-                        # is fully released, not while its keys are still up.
                         self._started_at = time.perf_counter()
                         self._suppress_activation_chord = False
                 if not active_parts.intersection(PLAY_HOTKEY_PARTS):
                     self._latched_hotkeys.discard("play")
         except Exception as exc:
             self._notify("listener_error", exc)
+
+    def _on_raw_mouse_move(self, dx: int, dy: int, x: int, y: int) -> None:
+        with self._lock:
+            self._append_locked("mouse_move", x=x, y=y, dx=dx, dy=dy)
 
     def _on_mouse_move(self, x: int, y: int) -> None:
         with self._lock:
@@ -347,9 +378,14 @@ class InputEngine:
                 pressed_keys.discard(key)
             return
 
-        mouse_controller.position = (event.data["x"], event.data["y"])
         if event.type == "mouse_move":
+            if WINDOWS_RAW_INPUT_AVAILABLE and "dx" in event.data:
+                send_relative_mouse(event.data["dx"], event.data["dy"])
+            else:
+                mouse_controller.position = (event.data["x"], event.data["y"])
             return
+
+        mouse_controller.position = (event.data["x"], event.data["y"])
         if event.type == "mouse_scroll":
             mouse_controller.scroll(event.data["dx"], event.data["dy"])
             return

@@ -34,12 +34,34 @@ python -m mrs2
 The **Start recording** and **Replay current** buttons remain available in the
 window. Button-started playback minimizes MRS2 before sending input.
 
+## Game camera movement on Windows
+
+MRS2 registers a hidden Windows Raw Input listener. New recordings store the
+mouse's hardware-relative `dx` and `dy` movement as well as its desktop cursor
+position. During playback those recordings use Windows `SendInput` relative
+motion, which is the form commonly consumed by first-person and third-person
+game cameras.
+
+Record the macro again after updating MRS2. Older `.mrs2` files contain only
+absolute cursor positions and continue to replay in the old desktop-compatible
+mode.
+
+If the game is running as administrator, run MRS2 at the same privilege level;
+Windows blocks input injection from a lower-integrity process. Some games or
+anti-cheat systems deliberately reject all injected input. MRS2 does not attempt
+to bypass those protections.
+
+Microsoft references: [Raw Input overview](https://learn.microsoft.com/en-us/windows/win32/inputdev/about-raw-input),
+[RAWMOUSE](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-rawmouse),
+and [SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput).
+
 ## Recording format
 
 `.mrs2` files are versioned JSON documents. Each event has a timestamp, a type,
-and the relevant key, button, coordinate, or scroll data. Mouse positions are
-absolute screen coordinates, so replay is most reliable with the same monitor
-layout, display scaling, and application window positions used while recording.
+and the relevant key, button, coordinate, delta, or scroll data. Mouse positions
+are absolute screen coordinates, so desktop replay is most reliable with the
+same monitor layout, display scaling, and application window positions used
+while recording.
 
 ## Safety and permissions
 
