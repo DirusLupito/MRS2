@@ -13,7 +13,8 @@ from .model import InputEvent, Recording, RecordingFormatError
 
 
 StateCallback = Callable[[str, object | None], None]
-HOTKEY_PARTS = frozenset({"ctrl", "alt", "shift"})
+RECORD_HOTKEY_PARTS = frozenset({"ctrl", "alt"})
+PLAY_HOTKEY_PARTS = frozenset({"ctrl", "shift"})
 
 
 def _hotkey_part(key: keyboard.Key | keyboard.KeyCode) -> str | None:
@@ -67,7 +68,7 @@ class InputEngine:
         self._started_at = 0.0
         self._created_at = ""
         self._held_hotkey_keys: set[keyboard.Key | keyboard.KeyCode] = set()
-        self._hotkey_latched = False
+        self._latched_hotkeys: set[str] = set()
         self._suppress_activation_chord = False
         self._hotkey_candidate_events: list[InputEvent] = []
         self._cancel_playback = threading.Event()
@@ -178,43 +179,59 @@ class InputEngine:
         self._events.append(event)
         return event
 
+    def _active_hotkey_parts_locked(self) -> set[str]:
+        return {
+            part
+            for held_key in self._held_hotkey_keys
+            if (part := _hotkey_part(held_key)) is not None
+        }
+
     def _on_key_press(self, key: keyboard.Key | keyboard.KeyCode) -> None:
         notifications: list[tuple[str, object | None]] = []
         try:
             with self._lock:
                 part = _hotkey_part(key)
-                first_hotkey_key = part is not None and not self._held_hotkey_keys
+                previous_parts = self._active_hotkey_parts_locked()
+                first_record_key = (
+                    part in RECORD_HOTKEY_PARTS
+                    and not previous_parts.intersection(RECORD_HOTKEY_PARTS)
+                )
                 if part is not None:
                     self._held_hotkey_keys.add(key)
 
                 if self._recording:
                     event = self._append_locked("key_down", key=_encode_key(key))
-                    if part is not None and event is not None:
-                        if first_hotkey_key:
+                    if part in RECORD_HOTKEY_PARTS and event is not None:
+                        if first_record_key:
                             self._hotkey_candidate_events = []
                         self._hotkey_candidate_events.append(event)
 
-                active_parts = {
-                    hotkey_part
-                    for held_key in self._held_hotkey_keys
-                    if (hotkey_part := _hotkey_part(held_key)) is not None
-                }
-                if active_parts == HOTKEY_PARTS and not self._hotkey_latched:
-                    self._hotkey_latched = True
-                    if self._playing:
-                        self._cancel_playback.set()
-                        notifications.append(("playback_stop_requested", None))
-                    elif self._recording:
+                active_parts = self._active_hotkey_parts_locked()
+                record_hotkey = RECORD_HOTKEY_PARTS.issubset(active_parts)
+                play_hotkey = PLAY_HOTKEY_PARTS.issubset(active_parts)
+
+                if self._recording:
+                    if record_hotkey and "record" not in self._latched_hotkeys:
+                        self._latched_hotkeys.add("record")
                         candidate_ids = {id(event) for event in self._hotkey_candidate_events}
                         self._events = [
                             event for event in self._events if id(event) not in candidate_ids
                         ]
                         recording = self._finish_recording_locked()
                         notifications.append(("recording_stopped", recording))
-                    else:
-                        self._start_recording_locked()
-                        self._suppress_activation_chord = True
-                        notifications.append(("recording_started", None))
+                elif self._playing:
+                    if play_hotkey and "play" not in self._latched_hotkeys:
+                        self._latched_hotkeys.add("play")
+                        self._cancel_playback.set()
+                        notifications.append(("playback_stop_requested", None))
+                elif record_hotkey and "record" not in self._latched_hotkeys:
+                    self._latched_hotkeys.add("record")
+                    self._start_recording_locked()
+                    self._suppress_activation_chord = True
+                    notifications.append(("recording_started", None))
+                elif play_hotkey and "play" not in self._latched_hotkeys:
+                    self._latched_hotkeys.add("play")
+                    notifications.append(("playback_requested", None))
         except Exception as exc:  # pynput stops a listener when a callback escapes
             notifications.append(("listener_error", exc))
 
@@ -227,19 +244,23 @@ class InputEngine:
                 part = _hotkey_part(key)
                 if self._recording:
                     event = self._append_locked("key_up", key=_encode_key(key))
-                    if part is not None and event is not None:
+                    if part in RECORD_HOTKEY_PARTS and event is not None:
                         self._hotkey_candidate_events.append(event)
 
                 if part is not None:
                     self._held_hotkey_keys.discard(key)
-                if not self._held_hotkey_keys:
-                    self._hotkey_latched = False
+                active_parts = self._active_hotkey_parts_locked()
+
+                if not active_parts.intersection(RECORD_HOTKEY_PARTS):
+                    self._latched_hotkeys.discard("record")
+                    self._hotkey_candidate_events = []
                     if self._suppress_activation_chord:
                         # Begin the event timeline after the activation chord
                         # is fully released, not while its keys are still up.
                         self._started_at = time.perf_counter()
-                    self._suppress_activation_chord = False
-                    self._hotkey_candidate_events = []
+                        self._suppress_activation_chord = False
+                if not active_parts.intersection(PLAY_HOTKEY_PARTS):
+                    self._latched_hotkeys.discard("play")
         except Exception as exc:
             self._notify("listener_error", exc)
 

@@ -18,18 +18,21 @@ python -m mrs2
 
 ## Record and replay
 
-1. Press **Ctrl + Alt + Shift** anywhere to start recording. The window
-   minimizes so it does not get in the way.
+1. Press **Ctrl + Alt** anywhere to start recording. The window minimizes so it
+   does not get in the way.
 2. Perform the keyboard and mouse actions to capture.
-3. Press **Ctrl + Alt + Shift** again to stop. The hotkey at either end is not
-   included in the recording.
+3. Press **Ctrl + Alt** again to stop. The hotkey at either end is not included
+   in the recording.
 4. MRS2 restores its window and automatically saves the recording under
    `recordings/recording-<timestamp>.mrs2`.
-5. Use **Replay current** to replay it, or **File > Load recording** to select a
-   previously saved `.mrs2` file. The same hotkey stops a replay early.
+5. Press **Ctrl + Shift** anywhere to replay the current recording, including
+   while a game has focus. Press it again to stop playback. Stopping does not
+   pause or save a position; the next play always starts from the beginning.
+6. Use **File > Load recording** to make a previously saved `.mrs2` file the
+   current recording.
 
-The **Start recording** button is also available. It minimizes the window and
-waits briefly for the button release before capture begins.
+The **Start recording** and **Replay current** buttons remain available in the
+window. Button-started playback minimizes MRS2 before sending input.
 
 ## Recording format
 

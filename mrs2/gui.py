@@ -14,7 +14,8 @@ from .recorder import InputEngine
 
 
 APP_TITLE = "MRS2 - Macro Recorder"
-HOTKEY_TEXT = "Ctrl + Alt + Shift"
+RECORD_HOTKEY_TEXT = "Ctrl + Alt"
+PLAY_HOTKEY_TEXT = "Ctrl + Shift"
 FILE_TYPES = [("MRS2 recordings", "*.mrs2"), ("All files", "*.*")]
 
 
@@ -67,6 +68,7 @@ class MacroRecorderApp:
         )
         self.current_recording: Recording | None = None
         self.current_path: Path | None = None
+        self._restore_after_playback = False
 
         self.status_text = tk.StringVar(value="Ready")
         self.current_text = tk.StringVar(value="Current recording: none")
@@ -107,7 +109,10 @@ class MacroRecorderApp:
         title.pack(anchor=tk.W)
         ttk.Label(
             outer,
-            text=f"Press {HOTKEY_TEXT} anywhere to start or stop recording.",
+            text=(
+                f"{RECORD_HOTKEY_TEXT} records. "
+                f"{PLAY_HOTKEY_TEXT} plays or stops the current recording."
+            ),
         ).pack(anchor=tk.W, pady=(2, 14))
 
         controls = ttk.Frame(outer)
@@ -151,7 +156,7 @@ class MacroRecorderApp:
             outer,
             text=(
                 "Replay uses the recorded timing and absolute screen coordinates. "
-                f"Press {HOTKEY_TEXT} during replay to stop it."
+                f"{PLAY_HOTKEY_TEXT} stops it; the next play starts from the beginning."
             ),
             wraplength=680,
         ).pack(anchor=tk.W, pady=(10, 0))
@@ -178,13 +183,25 @@ class MacroRecorderApp:
             messagebox.showinfo(APP_TITLE, "Load or record a macro first.")
             return
         try:
-            # Return focus to the previously active application before the
-            # first recorded event is sent.
+            self._restore_after_playback = True
             self.root.iconify()
             self.engine.play(self.current_recording, start_delay=0.75)
         except RuntimeError as exc:
+            self._restore_after_playback = False
             self.root.deiconify()
             messagebox.showwarning(APP_TITLE, str(exc))
+
+    def _play_from_hotkey(self) -> None:
+        if self.current_recording is None:
+            self.status_text.set("No current recording to replay")
+            return
+        try:
+            # The game already has focus, so only allow enough time for the
+            # Ctrl+Shift activation keys to be released.
+            self._restore_after_playback = False
+            self.engine.play(self.current_recording, start_delay=0.2)
+        except RuntimeError as exc:
+            self.status_text.set(str(exc))
 
     def _load(self) -> None:
         filename = filedialog.askopenfilename(
@@ -281,9 +298,11 @@ class MacroRecorderApp:
         self.event_preview.insert("1.0", text)
         self.event_preview.configure(state=tk.DISABLED)
 
-    def _restore_window(self) -> None:
-        self.root.deiconify()
-        self.root.lift()
+    def _restore_window_if_requested(self) -> None:
+        if self._restore_after_playback:
+            self.root.deiconify()
+            self.root.lift()
+        self._restore_after_playback = False
 
     def _poll_notifications(self) -> None:
         while True:
@@ -293,26 +312,28 @@ class MacroRecorderApp:
                 break
             if state == "recording_started":
                 self.status_text.set(
-                    f"Recording — press {HOTKEY_TEXT} to stop and save"
+                    f"Recording — press {RECORD_HOTKEY_TEXT} to stop and save"
                 )
                 self.root.iconify()
             elif state == "recording_stopped" and isinstance(payload, Recording):
                 self._handle_stopped_recording(payload)
+            elif state == "playback_requested":
+                self._play_from_hotkey()
             elif state == "playback_started":
                 self.status_text.set(
-                    f"Replaying — press {HOTKEY_TEXT} to cancel"
+                    f"Replaying — press {PLAY_HOTKEY_TEXT} to stop"
                 )
             elif state == "playback_stop_requested":
                 self.status_text.set("Stopping replay...")
             elif state == "playback_finished":
                 self.status_text.set("Replay finished")
-                self._restore_window()
+                self._restore_window_if_requested()
             elif state == "playback_cancelled":
-                self.status_text.set("Replay stopped")
-                self._restore_window()
+                self.status_text.set("Replay stopped; next play starts at the beginning")
+                self._restore_window_if_requested()
             elif state in {"playback_error", "listener_error"}:
                 self.status_text.set("Input error")
-                self._restore_window()
+                self._restore_window_if_requested()
                 messagebox.showerror(APP_TITLE, f"Input operation failed.\n\n{payload}")
             self._update_controls()
         self.root.after(50, self._poll_notifications)
